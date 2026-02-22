@@ -1,0 +1,31 @@
+version: "3.9"
+
+# Development override — hot reload for both backend and frontend
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  backend:
+    build:
+      context: ./backend
+      target: builder          # Use builder stage for dev dependencies
+    volumes:
+      - ./backend/app:/app/app  # Live mount for hot reload
+      - uploads:/tmp/code_builder_sessions
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      APP_ENV: development
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src   # Live mount for HMR
+    depends_on:
+      - backend
+
+volumes:
+  uploads:
