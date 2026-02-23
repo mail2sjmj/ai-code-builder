@@ -42,6 +42,12 @@ FRONTEND_PID_FILE = PIDS_DIR / "frontend.pid"
 
 IS_WINDOWS = platform.system() == "Windows"
 
+# Force UTF-8 output on Windows so box-drawing / tick / cross characters
+# (━  ✔  ✖  →) don't cause UnicodeEncodeError on cp1252 consoles.
+if IS_WINDOWS and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # ── Terminal colours ───────────────────────────────────────────────────────────
 # Enabled on any TTY; on Windows only when running inside Windows Terminal or
 # ConEmu (which set WT_SESSION / ANSICON).
@@ -89,6 +95,79 @@ def _venv_python() -> Path:
         if p.exists():
             return p
     return Path(sys.executable)
+
+
+def _venv_pip() -> Path:
+    """Return the pip executable inside .venv, falling back to system pip."""
+    venv = ROOT / ".venv"
+    candidates = (
+        [venv / "Scripts" / "pip.exe"]
+        if IS_WINDOWS
+        else [venv / "bin" / "pip3", venv / "bin" / "pip"]
+    )
+    for p in candidates:
+        if p.exists():
+            return p
+    fallback = shutil.which("pip3") or shutil.which("pip") or "pip"
+    return Path(fallback)
+
+
+# ── Dependency installation ────────────────────────────────────────────────────
+
+def _ensure_venv() -> None:
+    """Create a virtual environment at ROOT/.venv if one does not already exist."""
+    venv = ROOT / ".venv"
+    if venv.exists():
+        return
+    _info("Virtual environment not found — creating .venv …")
+    result = subprocess.run(
+        [sys.executable, "-m", "venv", str(venv)],
+        cwd=str(ROOT),
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Failed to create virtual environment. Check that 'python -m venv' works.")
+    _ok("Virtual environment created at .venv")
+
+
+def _ensure_backend_deps() -> None:
+    """Ensure .venv exists and all Python dependencies are installed."""
+    req_file = BACKEND_DIR / "requirements.txt"
+    if not req_file.exists():
+        _warn("backend/requirements.txt not found — skipping Python dependency install.")
+        return
+
+    _ensure_venv()
+    pip = _venv_pip()
+    _info(f"Installing Python dependencies  (pip install -r requirements.txt) …")
+    result = subprocess.run(
+        [str(pip), "install", "-r", str(req_file), "-q", "--disable-pip-version-check"],
+        cwd=str(ROOT),
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "pip install failed. Check requirements.txt and your network connection."
+        )
+    _ok("Python dependencies up to date.")
+
+
+def _ensure_frontend_deps() -> None:
+    """Run 'npm install' in the frontend directory if package.json is present."""
+    pkg_json = FRONTEND_DIR / "package.json"
+    if not pkg_json.exists():
+        _warn("frontend/package.json not found — skipping npm install.")
+        return
+
+    npm = shutil.which("npm") or "npm"
+    _info("Installing frontend dependencies  (npm install) …")
+    result = subprocess.run(
+        [npm, "install"],
+        cwd=str(FRONTEND_DIR),
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "npm install failed. Check frontend/package.json and your network connection."
+        )
+    _ok("Frontend dependencies up to date.")
 
 
 # ── PID file helpers ───────────────────────────────────────────────────────────
@@ -153,7 +232,16 @@ def _log_dir(app_env: str) -> Path:
     # 2. Parse LOG_DIR from backend/.env (simple key=value scan, no Python deps)
     env_file = BACKEND_DIR / ".env"
     if env_file.exists():
-        for raw in env_file.read_text(encoding="utf-8").splitlines():
+        raw_bytes = env_file.read_bytes()
+        for enc in ("utf-8-sig", "utf-16", "latin-1"):
+            try:
+                text = raw_bytes.decode(enc)
+                break
+            except (UnicodeDecodeError, ValueError):
+                continue
+        else:
+            text = ""
+        for raw in text.splitlines():
             line = raw.strip()
             if line.startswith("LOG_DIR=") and not line.startswith("#"):
                 val = line.split("=", 1)[1].strip().split("#")[0].strip()
@@ -186,6 +274,18 @@ def cmd_start(args: argparse.Namespace) -> int:
     fg       = args.foreground
 
     _header(f"Start  [{app_env.upper()}]")
+
+    # ── Install / sync dependencies ───────────────────────────────────────────
+    if args.skip_deps:
+        _info("Skipping dependency installation (--skip-deps).")
+    else:
+        try:
+            _ensure_backend_deps()
+            if args.frontend:
+                _ensure_frontend_deps()
+        except RuntimeError as exc:
+            _err(str(exc))
+            return 3
 
     # ── Guard: already running? ───────────────────────────────────────────────
     pid = _read_pid(BACKEND_PID_FILE)
@@ -269,17 +369,24 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     # ── Optionally start frontend dev server ──────────────────────────────────
     if args.frontend:
-        _start_frontend(app_env)
+        _start_frontend(app_env, skip_deps=True)  # already installed above
 
     return 0
 
 
-def _start_frontend(app_env: str) -> None:
+def _start_frontend(app_env: str, *, skip_deps: bool = False) -> None:
     _info("Starting frontend dev server…")
     pid = _read_pid(FRONTEND_PID_FILE)
     if pid and _process_running(pid):
         _warn(f"Frontend is already running (PID {pid}).")
         return
+
+    if not skip_deps:
+        try:
+            _ensure_frontend_deps()
+        except RuntimeError as exc:
+            _err(str(exc))
+            return
 
     npm = shutil.which("npm") or "npm"
     cmd = [npm, "run", "dev"]
@@ -418,6 +525,8 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="Also start the Vite frontend dev server")
     ps.add_argument("--foreground", action="store_true",
                     help="Run in foreground (blocking — useful for debugging)")
+    ps.add_argument("--skip-deps", action="store_true",
+                    help="Skip pip/npm dependency installation (faster restart when deps haven't changed)")
 
     # stop
     pp = sub.add_parser("stop", help="Stop running services")
