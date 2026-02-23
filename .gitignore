@@ -25,12 +25,25 @@ frontend/dist/
 frontend/.vite/
 *.tsbuildinfo
 
-# ─── Environment files (NEVER commit these) ──────────────────────────────────
+# ─── Environment files — ALL contain secrets — NEVER commit ─────────────────
+# Base selector (.env): sets APP_ENV only.
 .env
 .env.local
-.env.*.local
 backend/.env
 frontend/.env
+
+# Per-environment files (.env.development / .env.staging / .env.production):
+# each is fully self-contained and includes the ANTHROPIC_API_KEY for that
+# environment — must be gitignored.
+# Use .env.example as the template; create one file per environment locally.
+backend/.env.development
+backend/.env.staging
+backend/.env.production
+
+# Personal local overrides (e.g. .env.development.local) — also gitignored:
+.env.*.local
+backend/.env.*.local
+frontend/.env.*.local
 
 # ─── IDE ─────────────────────────────────────────────────────────────────────
 .vscode/
@@ -39,6 +52,9 @@ frontend/.env
 *.swo
 .DS_Store
 Thumbs.db
+
+# ─── Service management runtime files ───────────────────────────────────────
+.pids/              # PID files written by scripts/manage.py at runtime
 
 # ─── Docker ──────────────────────────────────────────────────────────────────
 .docker/

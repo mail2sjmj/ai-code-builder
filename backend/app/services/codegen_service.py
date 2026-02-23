@@ -13,6 +13,8 @@ from fastapi import HTTPException
 
 from app.config.settings import Settings
 from app.prompts.codegen_prompt import (
+    AUTOFIX_SYSTEM_PROMPT,
+    AUTOFIX_USER_PROMPT_TEMPLATE,
     CODEGEN_SYSTEM_PROMPT,
     CODEGEN_USER_PROMPT_TEMPLATE,
 )
@@ -78,7 +80,6 @@ async def stream_code_generation(
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     accumulated: list[str] = []
-    fence_stripped = False
 
     try:
         async with client.messages.stream(
@@ -90,29 +91,10 @@ async def stream_code_generation(
             async for text_delta in stream.text_stream:
                 accumulated.append(text_delta)
 
-                # Strip leading fence on first meaningful chunk
-                if not fence_stripped:
-                    joined = "".join(accumulated)
-                    # Wait until we have enough content to detect a fence
-                    if len(joined) >= 12 or "\n" in joined:
-                        fence_stripped = True
-                        first_line_end = joined.find("\n")
-                        if first_line_end != -1:
-                            first_line = joined[:first_line_end].strip()
-                            if first_line in _OPENING_FENCES:
-                                # Emit everything after the fence line
-                                yield joined[first_line_end + 1:]
-                                accumulated.clear()
-                                continue
-                        # No fence detected — emit accumulated as-is
-                        yield joined
-                        accumulated.clear()
-                else:
-                    yield text_delta
-
-            # Flush anything remaining
-            if accumulated:
-                yield "".join(accumulated)
+        # Strip opening and closing fences from the full output
+        code = "".join(accumulated)
+        code = _strip_fences(code)
+        yield code
 
     except anthropic.RateLimitError as exc:
         logger.warning("Anthropic rate limit: %s", exc)
@@ -122,6 +104,64 @@ async def stream_code_generation(
         ) from exc
     except anthropic.APIError as exc:
         logger.exception("Anthropic API error during code gen: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail={"error_code": "AI_API_ERROR", "message": f"AI service error: {exc}"},
+        ) from exc
+
+
+async def stream_code_fix(
+    session_id: str,
+    broken_code: str,
+    error_message: str,
+    session_store: SessionStore,
+    settings: Settings,
+) -> AsyncIterator[str]:
+    """
+    Stream a corrected version of broken Python code from Anthropic Claude.
+
+    Yields:
+        Fixed code text.
+    Raises:
+        HTTPException 404 if session not found.
+        HTTPException 502 on Anthropic API errors.
+    """
+    session = await session_store.get_session(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "SESSION_NOT_FOUND", "message": f"Session '{session_id}' not found."},
+        )
+
+    user_prompt = AUTOFIX_USER_PROMPT_TEMPLATE.format(
+        broken_code=broken_code,
+        error_message=error_message,
+    )
+
+    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    accumulated: list[str] = []
+
+    try:
+        async with client.messages.stream(
+            model=settings.ANTHROPIC_MODEL,
+            max_tokens=settings.CODEGEN_MAX_TOKENS,
+            system=AUTOFIX_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        ) as stream:
+            async for text_delta in stream.text_stream:
+                accumulated.append(text_delta)
+
+        code = _strip_fences("".join(accumulated))
+        yield code
+
+    except anthropic.RateLimitError as exc:
+        logger.warning("Anthropic rate limit during auto-fix: %s", exc)
+        raise HTTPException(
+            status_code=429,
+            detail={"error_code": "RATE_LIMITED", "message": "AI service rate limit reached."},
+        ) from exc
+    except anthropic.APIError as exc:
+        logger.exception("Anthropic API error during auto-fix: %s", exc)
         raise HTTPException(
             status_code=502,
             detail={"error_code": "AI_API_ERROR", "message": f"AI service error: {exc}"},

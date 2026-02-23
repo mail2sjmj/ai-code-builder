@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
 import Editor, { type OnMount } from '@monaco-editor/react'
 import type * as MonacoType from 'monaco-editor'
 import { useCodeStore } from '@/store/codeStore'
@@ -7,26 +7,16 @@ import appConfig from '@/config/app.config'
 
 export function MonacoCodeEditor() {
   const editorRef = useRef<MonacoType.editor.IStandaloneCodeEditor | null>(null)
-  const { generatedCode, editedCode, isGenerating, setEditedCode } = useCodeStore()
-
-  // Sync generated code into the editor when it updates (streaming)
-  useEffect(() => {
-    const editor = editorRef.current
-    if (!editor) return
-    const current = editor.getValue()
-    if (current !== generatedCode) {
-      editor.setValue(generatedCode)
-    }
-  }, [generatedCode])
+  const { editedCode, isGenerating, setEditedCode } = useCodeStore()
 
   const handleMount: OnMount = (editor) => {
     editorRef.current = editor
-    if (editedCode) editor.setValue(editedCode)
   }
 
   return (
-    <div className="relative h-full min-h-[400px]">
+    <div className="relative" style={{ height: '400px' }}>
       <Editor
+        value={editedCode}
         language={appConfig.editor.language}
         theme={appConfig.editor.theme}
         options={{

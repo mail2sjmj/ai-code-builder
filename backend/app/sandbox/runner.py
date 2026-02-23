@@ -102,18 +102,21 @@ def execute_code_in_sandbox(
     wrapper_file.write_text(_WRAPPER_TEMPLATE, encoding="utf-8")
 
     # Minimal environment — no home, no user, no secrets
+    import os
+    if sys.platform == "win32":
+        python_dir = str(Path(sys.executable).parent)
+        system_root = os.environ.get("SystemRoot", "C:\\Windows")
+        win_path = python_dir + ";" + os.path.join(system_root, "System32")
+    else:
+        win_path = ""
+
     sandbox_env = {
         "INPUT_FILE_PATH": str(input_parquet_path),
         "OUTPUT_FILE_PATH": str(output_csv_path),
-        "PATH": "/usr/bin:/bin" if sys.platform != "win32" else "",
+        "PATH": "/usr/bin:/bin" if sys.platform != "win32" else win_path,
         "PYTHONPATH": "",
         "PYTHONDONTWRITEBYTECODE": "1",
     }
-    # On Windows, pass minimal PATH
-    if sys.platform == "win32":
-        import os
-        python_dir = str(Path(sys.executable).parent)
-        sandbox_env["PATH"] = python_dir + ";" + os.environ.get("SystemRoot", "") + r"\system32"
 
     start_time = time.monotonic()
     try:
