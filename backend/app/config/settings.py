@@ -12,6 +12,7 @@ APP_ENV controls which overlay is applied. Defaults to "development".
 """
 
 import logging
+import os
 import tempfile
 from functools import lru_cache
 from pathlib import Path
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
-        env_file_encoding="utf-8",
+        env_file_encoding="utf-8-sig",  # handles UTF-8 with or without BOM
         case_sensitive=True,
         extra="ignore",
     )
@@ -120,20 +121,42 @@ class Settings(BaseSettings):
         return self.APP_ENV == "development"
 
 
+def _read_env_file_text(path: Path) -> str:
+    """Read an env file as text using a BOM-aware encoding fallback chain."""
+    raw = path.read_bytes()
+    for enc in ("utf-8-sig", "utf-16", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, ValueError):
+            continue
+    return ""  # unreachable with latin-1 fallback, but satisfies type-checker
+
+
 def _resolve_env_files() -> tuple[str, ...]:
     """
     Build the ordered list of .env files to load.
 
-    Pass 1: read APP_ENV from the base .env (or OS environment already set).
-    Pass 2: append the environment-specific overlay and optional local override.
+    APP_ENV is discovered without instantiating Settings (which would create
+    a chicken-and-egg problem).  Priority: OS env-var → .env file → "development".
 
     File priority (rightmost wins in pydantic-settings):
         .env  →  .env.<APP_ENV>  →  .env.<APP_ENV>.local
     """
-    # Discover APP_ENV without loading the full Settings model yet so we
-    # can compute the correct file list before instantiation.
-    bootstrap = Settings(_env_file=".env")  # type: ignore[call-arg]
-    app_env = bootstrap.APP_ENV
+    # OS env always takes priority
+    app_env = os.environ.get("APP_ENV", "").strip()
+
+    # Fall back to reading .env manually — byte-safe, no pydantic-settings involved
+    if not app_env:
+        env_path = Path(".env")
+        if env_path.exists():
+            for line in _read_env_file_text(env_path).splitlines():
+                line = line.strip()
+                if line.startswith("APP_ENV=") and not line.startswith("#"):
+                    app_env = line.split("=", 1)[1].strip().split("#")[0].strip()
+                    break
+
+    if not app_env:
+        app_env = "development"
 
     files: list[str] = [".env"]
 

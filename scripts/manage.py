@@ -42,6 +42,12 @@ FRONTEND_PID_FILE = PIDS_DIR / "frontend.pid"
 
 IS_WINDOWS = platform.system() == "Windows"
 
+# Force UTF-8 output on Windows so box-drawing / tick / cross characters
+# (━  ✔  ✖  →) don't cause UnicodeEncodeError on cp1252 consoles.
+if IS_WINDOWS and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # ── Terminal colours ───────────────────────────────────────────────────────────
 # Enabled on any TTY; on Windows only when running inside Windows Terminal or
 # ConEmu (which set WT_SESSION / ANSICON).
