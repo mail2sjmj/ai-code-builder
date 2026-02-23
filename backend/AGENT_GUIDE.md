@@ -54,54 +54,66 @@ AI-generated Python code in a restricted sandbox.
 ## 3. Project Scaffold
 
 ```
-backend/
-├── app/
-│   ├── __init__.py
-│   ├── main.py
-│   ├── api/
+ai-code-builder/
+├── backend/
+│   ├── app/
 │   │   ├── __init__.py
-│   │   ├── dependencies.py
-│   │   └── v1/
+│   │   ├── main.py
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   ├── dependencies.py
+│   │   │   └── v1/
+│   │   │       ├── __init__.py
+│   │   │       ├── router.py
+│   │   │       ├── upload.py
+│   │   │       ├── instructions.py
+│   │   │       ├── codegen.py
+│   │   │       └── execution.py
+│   │   ├── config/
+│   │   │   ├── __init__.py
+│   │   │   └── settings.py
+│   │   ├── prompts/
+│   │   │   ├── __init__.py
+│   │   │   ├── codegen_prompt.py
+│   │   │   └── refinement_prompt.py
+│   │   ├── sandbox/
+│   │   │   ├── __init__.py
+│   │   │   ├── policy.py
+│   │   │   ├── runner.py
+│   │   │   └── validator.py
+│   │   ├── schemas/
+│   │   │   ├── __init__.py
+│   │   │   ├── upload.py
+│   │   │   ├── instruction.py
+│   │   │   ├── codegen.py
+│   │   │   └── execution.py
+│   │   ├── services/
+│   │   │   ├── __init__.py
+│   │   │   ├── codegen_service.py
+│   │   │   ├── execution_service.py
+│   │   │   ├── file_service.py
+│   │   │   └── instruction_service.py
+│   │   ├── session/
+│   │   │   ├── __init__.py
+│   │   │   └── session_store.py
+│   │   └── utils/
 │   │       ├── __init__.py
-│   │       ├── router.py
-│   │       ├── upload.py
-│   │       ├── instructions.py
-│   │       ├── codegen.py
-│   │       └── execution.py
-│   ├── config/
-│   │   ├── __init__.py
-│   │   └── settings.py
-│   ├── prompts/
-│   │   ├── __init__.py
-│   │   ├── codegen_prompt.py
-│   │   └── refinement_prompt.py
-│   ├── sandbox/
-│   │   ├── __init__.py
-│   │   ├── policy.py
-│   │   ├── runner.py
-│   │   └── validator.py
-│   ├── schemas/
-│   │   ├── __init__.py
-│   │   ├── upload.py
-│   │   ├── instruction.py
-│   │   ├── codegen.py
-│   │   └── execution.py
-│   ├── services/
-│   │   ├── __init__.py
-│   │   ├── codegen_service.py
-│   │   ├── execution_service.py
-│   │   ├── file_service.py
-│   │   └── instruction_service.py
-│   ├── session/
-│   │   ├── __init__.py
-│   │   └── session_store.py
-│   └── utils/
-│       ├── __init__.py
-│       ├── file_utils.py
-│       └── streaming.py
-├── .env
-├── pyproject.toml          (or requirements.txt)
-└── AGENT_GUIDE.md
+│   │       ├── file_utils.py
+│   │       └── streaming.py
+│   ├── .env                    # APP_ENV selector only (gitignored)
+│   ├── .env.development        # full dev config incl. secrets (gitignored)
+│   ├── .env.staging            # full staging config (gitignored)
+│   ├── .env.production         # full production config (gitignored)
+│   ├── .env.example            # committed template — no secrets
+│   ├── requirements.txt
+│   └── AGENT_GUIDE.md
+├── frontend/                   # React/Vite app — see frontend/AGENT_GUIDE.md
+└── scripts/
+    ├── manage.py               # cross-platform service management (Python)
+    ├── start.bat  / start.sh   # thin wrappers → manage.py start
+    ├── stop.bat   / stop.sh    # thin wrappers → manage.py stop
+    ├── health.bat / health.sh  # thin wrappers → manage.py health
+    └── status.bat / status.sh  # thin wrappers → manage.py status
 ```
 
 Create all directories and empty `__init__.py` files before writing any logic.
@@ -151,28 +163,68 @@ python-magic-bin>=0.4.14   # Windows
 
 ---
 
-## 5. Environment Variables — `.env`
+## 5. Environment Variables — layered config
+
+Config is loaded in priority order (later = wins):
+
+```
+1. Built-in field defaults         (settings.py)
+2. backend/.env                    APP_ENV selector only  (gitignored)
+3. backend/.env.<APP_ENV>          full environment config (gitignored)
+4. backend/.env.<APP_ENV>.local    personal local tweaks   (gitignored)
+5. OS environment variables                                (always win)
+```
+
+`backend/.env` contains only:
+```env
+APP_ENV=development   # development | staging | production
+```
+
+`backend/.env.<APP_ENV>` is the fully self-contained config (copy from `.env.example`):
 
 ```env
-# Required
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Optional — defaults shown
+# ── Application ───────────────────────────────────────────────────────────────
 APP_ENV=development
 APP_VERSION=1.0.0
 API_PREFIX=/api/v1
-ALLOWED_ORIGINS=["http://localhost:5173","http://localhost:80"]
+ALLOWED_ORIGINS=["http://localhost:5173","http://localhost:3000","http://localhost:80"]
+
+# ── File Upload ───────────────────────────────────────────────────────────────
 MAX_UPLOAD_SIZE_MB=50
-TEMP_DIR=/tmp/code_builder_sessions   # use a Windows path on Windows
+ALLOWED_EXTENSIONS=[".csv",".xlsx"]
+# INBOUND_DIR: where uploaded files + parquet caches are stored.
+# Defaults to <tempdir>/code_builder_inbound if unset.
+# INBOUND_DIR=
+
 SESSION_TTL_SECONDS=3600
+
+# ── Sandbox Execution ─────────────────────────────────────────────────────────
+# TEMP_DIR: ephemeral sandbox artifacts (separate volume from INBOUND_DIR).
+# Defaults to <tempdir>/code_builder_sessions if unset.
+# TEMP_DIR=
+
+SANDBOX_TIMEOUT_SECONDS=30
+SANDBOX_MAX_MEMORY_MB=512
+SANDBOX_MAX_OUTPUT_ROWS=100000
+PREVIEW_ROW_COUNT=50
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+# LOG_DIR defaults to <tempdir>/code_builder_logs if unset.
+# LOG_DIR=
+LOG_LEVEL=INFO                  # DEBUG | INFO | WARNING | ERROR | CRITICAL
+LOG_MAX_BYTES=10485760          # 10 MB per file
+LOG_BACKUP_COUNT=5
+
+# ── Anthropic AI — REQUIRED ───────────────────────────────────────────────────
+ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=claude-sonnet-4-6
 REFINE_MAX_TOKENS=2048
 CODEGEN_MAX_TOKENS=8192
 AI_TEMPERATURE=0.2
-SANDBOX_TIMEOUT_SECONDS=30
-SANDBOX_MAX_MEMORY_MB=512
-PREVIEW_ROW_COUNT=50
+AI_REQUEST_TIMEOUT_SECONDS=120
 ```
+
+All `.env*` files except `.env.example` are gitignored — they contain secrets.
 
 ---
 
@@ -181,57 +233,147 @@ PREVIEW_ROW_COUNT=50
 Use Pydantic Settings so every value can be overridden by an environment variable or a
 `.env` file. No magic numbers elsewhere in the codebase.
 
+Key design points:
+- `INBOUND_DIR` (uploaded files, session-lifetime) is **separate** from `TEMP_DIR` (ephemeral sandbox artifacts) so they can live on different storage volumes.
+- All directory defaults use `tempfile.gettempdir()` via `default_factory` — never hardcode `/tmp`.
+- `_resolve_env_files()` performs a byte-safe two-pass bootstrap to support layered env files.
+- `get_settings()` is `@lru_cache` — one singleton per process.
+
 ```python
-from __future__ import annotations
-import json
+import logging
+import os
+import tempfile
+from functools import lru_cache
 from pathlib import Path
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Literal
+
 from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
-        env_file_encoding="utf-8",
+        env_file_encoding="utf-8-sig",   # handles UTF-8 with or without BOM
         case_sensitive=True,
+        extra="ignore",
     )
 
     # ── Application ───────────────────────────────────────────────────────
-    APP_ENV:     str = "development"
+    APP_ENV: Literal["development", "staging", "production"] = "development"
     APP_VERSION: str = "1.0.0"
     API_PREFIX:  str = "/api/v1"
-
     ALLOWED_ORIGINS: list[str] = Field(
-        default=["http://localhost:5173"],
+        default=["http://localhost:5173", "http://localhost:80"]
     )
 
-    @field_validator("ALLOWED_ORIGINS", mode="before")
-    @classmethod
-    def parse_origins(cls, v: str | list) -> list[str]:
-        if isinstance(v, str):
-            return json.loads(v)
-        return v
-
     # ── File Upload ───────────────────────────────────────────────────────
-    MAX_UPLOAD_SIZE_MB:  int       = 50
-    ALLOWED_EXTENSIONS:  list[str] = [".csv", ".xlsx"]
-    TEMP_DIR:            Path      = Path("/tmp/code_builder_sessions")
-    SESSION_TTL_SECONDS: int       = 3600
+    MAX_UPLOAD_SIZE_MB:  int       = Field(default=50, ge=1, le=500)
+    ALLOWED_EXTENSIONS:  list[str] = Field(default=[".csv", ".xlsx"])
 
-    # ── Anthropic ─────────────────────────────────────────────────────────
-    ANTHROPIC_API_KEY:   str   = ""
-    ANTHROPIC_MODEL:     str   = "claude-sonnet-4-6"
-    REFINE_MAX_TOKENS:   int   = 2048
-    CODEGEN_MAX_TOKENS:  int   = 8192
-    AI_TEMPERATURE:      float = 0.2
+    # INBOUND_DIR: where uploaded files (original + parquet cache) live.
+    # Use a persistent, backed-up volume in staging/production.
+    INBOUND_DIR: str = Field(
+        default_factory=lambda: str(Path(tempfile.gettempdir()) / "code_builder_inbound")
+    )
+    SESSION_TTL_SECONDS: int = Field(default=3600, ge=60)
 
-    # ── Sandbox ───────────────────────────────────────────────────────────
-    SANDBOX_TIMEOUT_SECONDS: int = 30
-    SANDBOX_MAX_MEMORY_MB:   int = 512
-    PREVIEW_ROW_COUNT:       int = 50
+    # ── Sandbox Execution ─────────────────────────────────────────────────
+    # TEMP_DIR: ephemeral per-execution artifacts (wrapper scripts, output CSVs).
+    TEMP_DIR: str = Field(
+        default_factory=lambda: str(Path(tempfile.gettempdir()) / "code_builder_sessions")
+    )
+    SANDBOX_TIMEOUT_SECONDS:  int = Field(default=30,      ge=5,   le=300)
+    SANDBOX_MAX_MEMORY_MB:    int = Field(default=512,     ge=64,  le=4096)
+    SANDBOX_MAX_OUTPUT_ROWS:  int = Field(default=100_000, ge=100)
+    PREVIEW_ROW_COUNT:        int = Field(default=50,      ge=5,   le=500)
+
+    # ── Logging ───────────────────────────────────────────────────────────
+    LOG_DIR: str = Field(
+        default_factory=lambda: str(Path(tempfile.gettempdir()) / "code_builder_logs")
+    )
+    LOG_LEVEL:        Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    LOG_MAX_BYTES:    int = Field(default=10 * 1024 * 1024, ge=1024 * 1024)
+    LOG_BACKUP_COUNT: int = Field(default=5, ge=0, le=20)
+
+    # ── Anthropic AI ──────────────────────────────────────────────────────
+    ANTHROPIC_API_KEY:          str   = Field(default="")
+    ANTHROPIC_MODEL:            str   = "claude-sonnet-4-6"
+    REFINE_MAX_TOKENS:          int   = Field(default=2048,  ge=256,  le=8192)
+    CODEGEN_MAX_TOKENS:         int   = Field(default=8192,  ge=1024, le=32768)
+    AI_TEMPERATURE:             float = Field(default=0.2,   ge=0.0,  le=1.0)
+    AI_REQUEST_TIMEOUT_SECONDS: int   = Field(default=120,   ge=10,   le=600)
+
+    @field_validator("ALLOWED_EXTENSIONS", "ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def _parse_json_list(cls, v: object) -> list:
+        if isinstance(v, str):
+            import json
+            return json.loads(v)
+        return v  # type: ignore[return-value]
+
+    @property
+    def max_upload_size_bytes(self) -> int:
+        return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV == "production"
+
+    @property
+    def is_development(self) -> bool:
+        return self.APP_ENV == "development"
 
 
-settings = Settings()
+def _read_env_file_text(path: Path) -> str:
+    """Read an env file as text using a BOM-aware encoding fallback chain."""
+    raw = path.read_bytes()
+    for enc in ("utf-8-sig", "utf-16", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, ValueError):
+            continue
+    return ""
+
+
+def _resolve_env_files() -> tuple[str, ...]:
+    """
+    Discover APP_ENV without instantiating Settings (avoids chicken-and-egg).
+    Priority: OS env-var → .env file → "development".
+    Returns the ordered list of env files for the full Settings load.
+    """
+    app_env = os.environ.get("APP_ENV", "").strip()
+
+    if not app_env:
+        env_path = Path(".env")
+        if env_path.exists():
+            for line in _read_env_file_text(env_path).splitlines():
+                line = line.strip()
+                if line.startswith("APP_ENV=") and not line.startswith("#"):
+                    app_env = line.split("=", 1)[1].strip().split("#")[0].strip()
+                    break
+
+    if not app_env:
+        app_env = "development"
+
+    files: list[str] = [".env"]
+    for suffix in (f".env.{app_env}", f".env.{app_env}.local"):
+        if Path(suffix).exists():
+            files.append(suffix)
+    return tuple(files)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    env_files = _resolve_env_files()
+    settings = Settings(_env_file=env_files)  # type: ignore[call-arg]
+    logger.info(
+        "Settings loaded: env=%s files=%s model=%s",
+        settings.APP_ENV, env_files, settings.ANTHROPIC_MODEL,
+    )
+    return settings
 ```
 
 ---
@@ -741,7 +883,8 @@ async def save_and_parse_file(
 ) -> SessionData:
     """Persist the upload, parse it, and create a session."""
     session = await session_store.create()
-    session_dir = settings.TEMP_DIR / session.session_id
+    # INBOUND_DIR holds uploaded files; TEMP_DIR is for ephemeral sandbox artifacts.
+    session_dir = Path(settings.INBOUND_DIR) / session.session_id
     session_dir.mkdir(parents=True, exist_ok=True)
 
     # Write raw file
@@ -914,7 +1057,8 @@ async def _run_job(session: SessionData, job: ExecutionJob, code: str) -> None:
     job.status     = "running"
     job.started_at = time.time()
 
-    work_dir    = settings.TEMP_DIR / session.session_id / "jobs" / job.job_id
+    # TEMP_DIR for sandbox artifacts; INBOUND_DIR (where parquet lives) stays separate.
+    work_dir    = Path(settings.TEMP_DIR) / session.session_id / "jobs" / job.job_id
     output_path = work_dir / "output.csv"
 
     exit_code, _stdout, stderr = await run_in_sandbox(
@@ -1135,12 +1279,20 @@ v1_router.include_router(execution_router)
 
 ## 15. Application Factory — `app/main.py`
 
+Key responsibilities beyond a basic FastAPI app:
+- `_configure_logging()` — sets up `RotatingFileHandler` writing to `LOG_DIR/app.<APP_ENV>.log`.
+- `_validate_startup()` — asserts `ANTHROPIC_API_KEY` is set and all three dirs (`INBOUND_DIR`, `TEMP_DIR`, `LOG_DIR`) are writable; calls `sys.exit(1)` on failure so the process never starts silently broken.
+- Health endpoint returns all three directory paths for ops visibility.
+
 ```python
 from __future__ import annotations
 import asyncio
 import logging
+import logging.handlers
+import sys
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -1148,111 +1300,192 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.v1.router import v1_router
-from app.config.settings import settings
+from app.config.settings import Settings, get_settings
 from app.session.session_store import session_store
 
-# ── Logging ───────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
-)
-log = logging.getLogger(__name__)
+
+def _configure_logging(settings: Settings) -> None:
+    level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
+    fmt   = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    formatter = logging.Formatter(fmt)
+
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(formatter)
+
+    log_dir  = Path(settings.LOG_DIR)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"app.{settings.APP_ENV}.log"
+    fh = logging.handlers.RotatingFileHandler(
+        str(log_file),
+        maxBytes=settings.LOG_MAX_BYTES,
+        backupCount=settings.LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    fh.setFormatter(formatter)
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.handlers.clear()
+    root.addHandler(console)
+    root.addHandler(fh)
+
+
+def _validate_startup(settings: Settings) -> None:
+    errors: list[str] = []
+    if not settings.ANTHROPIC_API_KEY:
+        errors.append("ANTHROPIC_API_KEY is not set.")
+    for name, path_str in [
+        ("INBOUND_DIR", settings.INBOUND_DIR),
+        ("TEMP_DIR",    settings.TEMP_DIR),
+        ("LOG_DIR",     settings.LOG_DIR),
+    ]:
+        p = Path(path_str)
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            probe = p / ".write_test"
+            probe.touch(); probe.unlink()
+        except Exception as exc:
+            errors.append(f"{name} '{path_str}' is not writable: {exc}")
+    if errors:
+        for e in errors:
+            logging.critical("Startup validation failed: %s", e)
+        sys.exit(1)
 
 
 # ── Background cleanup task ───────────────────────────────────────────────────
 async def _cleanup_loop() -> None:
+    log = logging.getLogger(__name__)
     while True:
-        await asyncio.sleep(900)   # every 15 minutes
+        await asyncio.sleep(900)
         removed = await session_store.cleanup_expired()
         if removed:
             log.info("Session cleanup: removed %d expired sessions", removed)
 
 
-# ── Lifespan ──────────────────────────────────────────────────────────────────
-@asynccontextmanager
-async def lifespan(app: FastAPI):  # type: ignore[type-arg]
-    settings.TEMP_DIR.mkdir(parents=True, exist_ok=True)
-    log.info("AI Code Builder starting — env=%s", settings.APP_ENV)
-    cleanup_task = asyncio.create_task(_cleanup_loop())
-    yield
-    cleanup_task.cancel()
-    log.info("AI Code Builder stopped")
+def create_app() -> FastAPI:
+    settings = get_settings()
+    _configure_logging(settings)
+    log = logging.getLogger(__name__)
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):  # type: ignore[type-arg]
+        _validate_startup(settings)
+        log.info("AI Code Builder starting — env=%s version=%s", settings.APP_ENV, settings.APP_VERSION)
+        task = asyncio.create_task(_cleanup_loop())
+        yield
+        task.cancel()
+        log.info("AI Code Builder stopped")
 
-# ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(
-    title="AI Code Builder API",
-    version=settings.APP_VERSION,
-    lifespan=lifespan,
-    docs_url="/docs" if settings.APP_ENV != "production" else None,
-    redoc_url=None,
-)
-
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ── Middleware ────────────────────────────────────────────────────────────────
-@app.middleware("http")
-async def add_security_headers(request: Request, call_next: Any) -> Any:
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"]        = "DENY"
-    response.headers["Referrer-Policy"]        = "strict-origin-when-cross-origin"
-    return response
-
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next: Any) -> Any:
-    start = time.perf_counter()
-    response = await call_next(request)
-    ms = (time.perf_counter() - start) * 1000
-    log.info("%s %s → %d (%.0fms)", request.method, request.url.path, response.status_code, ms)
-    return response
-
-
-# ── Exception handlers ────────────────────────────────────────────────────────
-@app.exception_handler(Exception)
-async def generic_handler(request: Request, exc: Exception) -> JSONResponse:
-    log.exception("Unhandled error on %s", request.url.path)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"},
+    app = FastAPI(
+        title="AI Code Builder API",
+        version=settings.APP_VERSION,
+        lifespan=lifespan,
+        docs_url="/docs" if not settings.is_production else None,
+        redoc_url=None,
     )
 
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.ALLOWED_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-# ── Health ────────────────────────────────────────────────────────────────────
-@app.get("/health", tags=["health"])
-async def health() -> dict:
-    return {"status": "ok", "version": settings.APP_VERSION, "env": settings.APP_ENV}
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next: Any) -> Any:
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"]        = "DENY"
+        response.headers["Referrer-Policy"]        = "strict-origin-when-cross-origin"
+        return response
+
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next: Any) -> Any:
+        start = time.perf_counter()
+        response = await call_next(request)
+        ms = (time.perf_counter() - start) * 1000
+        log.info("%s %s → %d (%.0fms)", request.method, request.url.path, response.status_code, ms)
+        return response
+
+    @app.exception_handler(Exception)
+    async def generic_handler(request: Request, exc: Exception) -> JSONResponse:
+        log.exception("Unhandled error on %s", request.url.path)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+    @app.get("/health", tags=["health"])
+    async def health() -> dict:
+        return {
+            "status":      "ok",
+            "env":         settings.APP_ENV,
+            "version":     settings.APP_VERSION,
+            "inbound_dir": settings.INBOUND_DIR,
+            "temp_dir":    settings.TEMP_DIR,
+            "log_dir":     settings.LOG_DIR,
+        }
+
+    app.include_router(v1_router, prefix=settings.API_PREFIX)
+    return app
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
-app.include_router(v1_router, prefix=settings.API_PREFIX)
+app = create_app()
 ```
 
 ---
 
 ## 16. Running the Backend
 
+### Using the service scripts (recommended)
+
+`scripts/manage.py` is a cross-platform Python script (no external deps) that handles
+venv creation, dependency installation, process management, PID tracking, and health polling.
+
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Windows
+scripts\start.bat                      # backend only, development
+scripts\start.bat --frontend           # backend + Vite dev server
+scripts\start.bat --foreground         # stay in foreground (shows logs live)
+scripts\start.bat --skip-deps          # skip pip/npm install (fast restart)
+scripts\stop.bat
+scripts\stop.bat --frontend
+scripts\health.bat
+scripts\status.bat
 
-# Start development server with hot-reload
+# Unix/macOS
+bash scripts/start.sh
+bash scripts/start.sh --frontend
+bash scripts/stop.sh
+bash scripts/health.sh
+bash scripts/status.sh
+
+# Direct (any OS)
+python scripts/manage.py start --env development --port 8000
+python scripts/manage.py stop
+python scripts/manage.py health
+python scripts/manage.py status
+```
+
+### Manual (dev only)
+
+```bash
+# Create and activate venv
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Unix:    source .venv/bin/activate
+
+pip install -r backend/requirements.txt
+
+cd backend
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-
-# Or with Poetry
-poetry run uvicorn app.main:app --reload --port 8000
 ```
 
 The API docs are available at `http://localhost:8000/docs` in development mode.
+
+### Prerequisites before first start
+
+1. Create `backend/.env` containing just `APP_ENV=development`
+2. Create `backend/.env.development` from `backend/.env.example` — fill in `ANTHROPIC_API_KEY`
+3. Save both files as **UTF-8** (not UTF-16); in VSCode: click the encoding in the status bar → *Save with Encoding* → *UTF-8*
 
 ---
 
