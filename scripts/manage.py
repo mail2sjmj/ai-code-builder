@@ -226,7 +226,16 @@ def _log_dir(app_env: str) -> Path:
     # 2. Parse LOG_DIR from backend/.env (simple key=value scan, no Python deps)
     env_file = BACKEND_DIR / ".env"
     if env_file.exists():
-        for raw in env_file.read_text(encoding="utf-8").splitlines():
+        raw_bytes = env_file.read_bytes()
+        for enc in ("utf-8-sig", "utf-16", "latin-1"):
+            try:
+                text = raw_bytes.decode(enc)
+                break
+            except (UnicodeDecodeError, ValueError):
+                continue
+        else:
+            text = ""
+        for raw in text.splitlines():
             line = raw.strip()
             if line.startswith("LOG_DIR=") and not line.startswith("#"):
                 val = line.split("=", 1)[1].strip().split("#")[0].strip()
