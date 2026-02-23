@@ -62,9 +62,12 @@ async def parse_uploaded_file(
             detail={"error_code": "EMPTY_FILE", "message": "Uploaded file is empty."},
         )
 
-    # ── 3. Create session directory ──────────────────────────────────────────
+    # ── 3. Create session directory under INBOUND_DIR ────────────────────────
+    # INBOUND_DIR holds uploaded files and their parquet caches for the
+    # full session lifetime.  TEMP_DIR is reserved for sandbox execution
+    # artifacts which are short-lived and can live on faster/ephemeral storage.
     session_id = str(uuid.uuid4())
-    session_dir = get_session_dir(settings.TEMP_DIR, session_id)
+    session_dir = get_session_dir(settings.INBOUND_DIR, session_id)
     session_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = safe_filename(original_name)

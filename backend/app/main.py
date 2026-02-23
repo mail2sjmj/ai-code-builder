@@ -4,9 +4,8 @@ Configures middleware, routers, lifecycle events, and exception handlers.
 """
 
 import asyncio
-import json
 import logging
-import logging.config
+import logging.handlers
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -18,23 +17,55 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.api.v1.router import router as v1_router
-from app.config.settings import get_settings
+from app.config.settings import Settings, get_settings
 from app.session.session_store import get_session_store
 
-# ── Logging Setup ─────────────────────────────────────────────────────────────
+# ── Logging Setup ──────────────────────────────────────────────────────────────
 
-def _configure_logging(app_env: str) -> None:
-    if app_env == "production":
-        # JSON structured logging in production
-        fmt = '{"time":"%(asctime)s","level":"%(levelname)s","module":"%(name)s","msg":"%(message)s"}'
+def _configure_logging(settings: Settings) -> None:
+    """
+    Configure the root logger with:
+      - A StreamHandler (stdout) for console output.
+      - A RotatingFileHandler writing to LOG_DIR/app.<APP_ENV>.log.
+
+    Log format is plain text in development/staging and JSON-structured
+    in production to simplify ingestion by log aggregators.
+    """
+    level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
+
+    if settings.is_production:
+        fmt = (
+            '{"time":"%(asctime)s","level":"%(levelname)s",'
+            '"module":"%(name)s","msg":"%(message)s"}'
+        )
     else:
         fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
-    logging.basicConfig(
-        level=logging.DEBUG if app_env == "development" else logging.INFO,
-        format=fmt,
-        stream=sys.stdout,
+    formatter = logging.Formatter(fmt)
+
+    # ── Console handler ───────────────────────────────────────────────────────
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+
+    # ── Rotating file handler ─────────────────────────────────────────────────
+    log_dir = Path(settings.LOG_DIR)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"app.{settings.APP_ENV}.log"
+
+    file_handler = logging.handlers.RotatingFileHandler(
+        str(log_file),
+        maxBytes=settings.LOG_MAX_BYTES,
+        backupCount=settings.LOG_BACKUP_COUNT,
+        encoding="utf-8",
     )
+    file_handler.setFormatter(formatter)
+
+    # ── Apply to root logger ─────────────────────────────────────────────────
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.handlers.clear()
+    root.addHandler(console_handler)
+    root.addHandler(file_handler)
 
 
 logger = logging.getLogger(__name__)
@@ -42,27 +73,48 @@ logger = logging.getLogger(__name__)
 
 # ── Startup validation ────────────────────────────────────────────────────────
 
-def _validate_startup(settings) -> None:  # type: ignore[no-untyped-def]
-    errors = []
+def _validate_startup(settings: Settings) -> None:
+    """
+    Validate critical configuration on startup.
+    Checks that required secrets are present and that all configured
+    directories (INBOUND_DIR, TEMP_DIR, LOG_DIR) are writable.
+    """
+    errors: list[str] = []
+
     if not settings.ANTHROPIC_API_KEY:
         errors.append("ANTHROPIC_API_KEY is not set.")
-    temp_dir = Path(settings.TEMP_DIR)
-    try:
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        test_file = temp_dir / ".write_test"
-        test_file.touch()
-        test_file.unlink()
-    except Exception as exc:
-        errors.append(f"TEMP_DIR '{settings.TEMP_DIR}' is not writable: {exc}")
+
+    dirs_to_check = [
+        ("INBOUND_DIR", settings.INBOUND_DIR),
+        ("TEMP_DIR",    settings.TEMP_DIR),
+        ("LOG_DIR",     settings.LOG_DIR),
+    ]
+    for dir_name, dir_path in dirs_to_check:
+        path = Path(dir_path)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            test_file = path / ".write_test"
+            test_file.touch()
+            test_file.unlink()
+        except Exception as exc:
+            errors.append(f"{dir_name} '{dir_path}' is not writable: {exc}")
+
     if errors:
         for err in errors:
             logger.critical("Startup validation failed: %s", err)
         sys.exit(1)
 
+    logger.info(
+        "Directory check passed — inbound=%s  temp=%s  logs=%s",
+        settings.INBOUND_DIR,
+        settings.TEMP_DIR,
+        settings.LOG_DIR,
+    )
+
 
 # ── Session cleanup background task ──────────────────────────────────────────
 
-async def _session_cleanup_loop(settings, session_store) -> None:  # type: ignore[no-untyped-def]
+async def _session_cleanup_loop(settings: Settings, session_store) -> None:  # type: ignore[no-untyped-def]
     interval = 15 * 60  # every 15 minutes
     while True:
         await asyncio.sleep(interval)
@@ -76,15 +128,17 @@ async def _session_cleanup_loop(settings, session_store) -> None:  # type: ignor
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     settings = get_settings()
-    _configure_logging(settings.APP_ENV)
+    _configure_logging(settings)
     _validate_startup(settings)
     session_store = get_session_store()
     cleanup_task = asyncio.create_task(_session_cleanup_loop(settings, session_store))
     logger.info(
-        "AI Code Builder started: version=%s env=%s model=%s",
+        "AI Code Builder started: version=%s env=%s model=%s log=%s/app.%s.log",
         settings.APP_VERSION,
         settings.APP_ENV,
         settings.ANTHROPIC_MODEL,
+        settings.LOG_DIR,
+        settings.APP_ENV,
     )
     try:
         yield
@@ -134,17 +188,17 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         duration_ms = int((time.monotonic() - start) * 1000)
         response.headers["X-Response-Time"] = f"{duration_ms}ms"
-        logger.debug("%s %s → %d (%dms)", request.method, request.url.path, response.status_code, duration_ms)
+        logger.debug(
+            "%s %s → %d (%dms)",
+            request.method, request.url.path, response.status_code, duration_ms,
+        )
         return response
 
     # ── Exception handlers ───────────────────────────────────────────────────
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):  # type: ignore[no-untyped-def]
         detail = exc.detail
-        if isinstance(detail, dict):
-            body = detail
-        else:
-            body = {"error_code": "HTTP_ERROR", "message": str(detail)}
+        body = detail if isinstance(detail, dict) else {"error_code": "HTTP_ERROR", "message": str(detail)}
         return JSONResponse(status_code=exc.status_code, content=body)
 
     @app.exception_handler(ValidationError)
@@ -179,6 +233,9 @@ def create_app() -> FastAPI:
             "status": "ok",
             "version": settings.APP_VERSION,
             "env": settings.APP_ENV,
+            "inbound_dir": settings.INBOUND_DIR,
+            "temp_dir": settings.TEMP_DIR,
+            "log_dir": settings.LOG_DIR,
         }
 
     return app

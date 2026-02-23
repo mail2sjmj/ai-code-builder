@@ -1,10 +1,20 @@
 """
 Application configuration via Pydantic BaseSettings.
-All values are overridable via environment variables or a .env file.
+
+Config is loaded in layered order (later = higher priority):
+  1. Built-in field defaults
+  2. .env                  — base/shared config (secrets live here; gitignored)
+  3. .env.<APP_ENV>        — per-environment overrides (committed; no secrets)
+  4. .env.<APP_ENV>.local  — personal local overrides (gitignored)
+  5. OS environment variables (highest priority — always wins)
+
+APP_ENV controls which overlay is applied. Defaults to "development".
 """
 
 import logging
+import tempfile
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator
@@ -32,8 +42,38 @@ class Settings(BaseSettings):
     # ── File Upload ───────────────────────────────────────────────────────────
     MAX_UPLOAD_SIZE_MB: int = Field(default=50, ge=1, le=500)
     ALLOWED_EXTENSIONS: list[str] = Field(default=[".csv", ".xlsx"])
-    TEMP_DIR: str = "/tmp/code_builder_sessions"
+
+    # Inbound: where uploaded files (original + parquet cache) are stored.
+    # Separate from TEMP_DIR so long-lived session data and ephemeral
+    # sandbox artifacts can be placed on different storage volumes.
+    INBOUND_DIR: str = Field(
+        default_factory=lambda: str(Path(tempfile.gettempdir()) / "code_builder_inbound")
+    )
+
     SESSION_TTL_SECONDS: int = Field(default=3600, ge=60)
+
+    # ── Sandbox Execution ─────────────────────────────────────────────────────
+    # TEMP_DIR holds ephemeral per-execution artifacts (wrapper scripts, output CSVs).
+    # Can point to a fast/local disk that is cleaned up more aggressively than INBOUND_DIR.
+    TEMP_DIR: str = Field(
+        default_factory=lambda: str(Path(tempfile.gettempdir()) / "code_builder_sessions")
+    )
+    SANDBOX_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=300)
+    SANDBOX_MAX_MEMORY_MB: int = Field(default=512, ge=64, le=4096)
+    SANDBOX_MAX_OUTPUT_ROWS: int = Field(default=100_000, ge=100)
+    PREVIEW_ROW_COUNT: int = Field(default=50, ge=5, le=500)
+
+    # ── Logging ───────────────────────────────────────────────────────────────
+    # LOG_DIR: directory where rotating log files are written.
+    LOG_DIR: str = Field(
+        default_factory=lambda: str(Path(tempfile.gettempdir()) / "code_builder_logs")
+    )
+    # LOG_LEVEL: standard Python logging level name.
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # LOG_MAX_BYTES: max size of a single log file before rotation (default 10 MB).
+    LOG_MAX_BYTES: int = Field(default=10 * 1024 * 1024, ge=1024 * 1024)
+    # LOG_BACKUP_COUNT: number of rotated files to keep.
+    LOG_BACKUP_COUNT: int = Field(default=5, ge=0, le=20)
 
     # ── Anthropic AI ──────────────────────────────────────────────────────────
     ANTHROPIC_API_KEY: str = Field(default="", description="Required in production")
@@ -43,11 +83,7 @@ class Settings(BaseSettings):
     AI_TEMPERATURE: float = Field(default=0.2, ge=0.0, le=1.0)
     AI_REQUEST_TIMEOUT_SECONDS: int = Field(default=120, ge=10, le=600)
 
-    # ── Sandbox Execution ─────────────────────────────────────────────────────
-    SANDBOX_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=300)
-    SANDBOX_MAX_MEMORY_MB: int = Field(default=512, ge=64, le=4096)
-    SANDBOX_MAX_OUTPUT_ROWS: int = Field(default=100_000, ge=100)
-    PREVIEW_ROW_COUNT: int = Field(default=50, ge=5, le=500)
+    # ── Validators ────────────────────────────────────────────────────────────
 
     @field_validator("ALLOWED_EXTENSIONS", mode="before")
     @classmethod
@@ -65,6 +101,8 @@ class Settings(BaseSettings):
             return json.loads(v)
         return v  # type: ignore[return-value]
 
+    # ── Computed properties ───────────────────────────────────────────────────
+
     @property
     def max_upload_size_bytes(self) -> int:
         return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
@@ -73,14 +111,59 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.APP_ENV == "production"
 
+    @property
+    def is_staging(self) -> bool:
+        return self.APP_ENV == "staging"
+
+    @property
+    def is_development(self) -> bool:
+        return self.APP_ENV == "development"
+
+
+def _resolve_env_files() -> tuple[str, ...]:
+    """
+    Build the ordered list of .env files to load.
+
+    Pass 1: read APP_ENV from the base .env (or OS environment already set).
+    Pass 2: append the environment-specific overlay and optional local override.
+
+    File priority (rightmost wins in pydantic-settings):
+        .env  →  .env.<APP_ENV>  →  .env.<APP_ENV>.local
+    """
+    # Discover APP_ENV without loading the full Settings model yet so we
+    # can compute the correct file list before instantiation.
+    bootstrap = Settings(_env_file=".env")  # type: ignore[call-arg]
+    app_env = bootstrap.APP_ENV
+
+    files: list[str] = [".env"]
+
+    overlay = f".env.{app_env}"
+    if Path(overlay).exists():
+        files.append(overlay)
+
+    local_override = f".env.{app_env}.local"
+    if Path(local_override).exists():
+        files.append(local_override)
+
+    return tuple(files)
+
 
 @lru_cache
 def get_settings() -> Settings:
-    """Return a cached singleton Settings instance."""
-    settings = Settings()
+    """
+    Return a cached singleton Settings instance.
+
+    Config files are resolved based on APP_ENV (see _resolve_env_files).
+    OS environment variables always take the highest priority.
+    """
+    env_files = _resolve_env_files()
+    settings = Settings(_env_file=env_files)  # type: ignore[call-arg]
+
+    loaded = ", ".join(f for f in env_files if Path(f).exists())
     logger.info(
-        "Settings loaded: env=%s version=%s model=%s",
+        "Settings loaded: env=%s files=[%s] version=%s model=%s",
         settings.APP_ENV,
+        loaded,
         settings.APP_VERSION,
         settings.ANTHROPIC_MODEL,
     )

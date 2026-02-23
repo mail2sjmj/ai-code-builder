@@ -8,6 +8,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 from fastapi import HTTPException
@@ -18,6 +19,18 @@ from app.sandbox.validator import validate_code
 from app.session.session_store import ExecutionJob, SessionStore
 
 logger = logging.getLogger(__name__)
+
+_OPENING_FENCES = ("```python", "```py", "```")
+
+
+def _strip_markdown_fences(code: str) -> str:
+    """Strip markdown code fences the AI may add despite being told not to."""
+    lines = code.strip().splitlines()
+    if lines and lines[0].strip() in _OPENING_FENCES:
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines)
 
 
 async def submit_execution_job(
@@ -39,6 +52,9 @@ async def submit_execution_job(
             status_code=404,
             detail={"error_code": "SESSION_NOT_FOUND", "message": f"Session '{session_id}' not found."},
         )
+
+    # Strip any markdown fences the AI may have included
+    code = _strip_markdown_fences(code)
 
     # AST validation before any execution
     validation = validate_code(code)
@@ -83,14 +99,20 @@ async def _run_job(
     )
     await session_store.update_execution_job(session_id, job)
 
+    # Execution artifacts (wrapper scripts, output CSVs) are written under
+    # TEMP_DIR/<session_id>/ — separate from INBOUND_DIR where uploaded
+    # files live.  This allows each storage location to have its own
+    # retention, quota, and backup policy.
+    exec_session_dir = str(Path(settings.TEMP_DIR) / session_id)
+
     loop = asyncio.get_event_loop()
     try:
         result = await loop.run_in_executor(
             None,
             execute_code_in_sandbox,
             code,
-            str(session.parquet_path).replace("data.parquet", ""),  # session_dir
-            session.parquet_path,
+            exec_session_dir,            # sandbox artifact directory (TEMP_DIR)
+            session.parquet_path,         # input data path (INBOUND_DIR)
             settings.SANDBOX_TIMEOUT_SECONDS,
             settings.SANDBOX_MAX_OUTPUT_ROWS,
         )

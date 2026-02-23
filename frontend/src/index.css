@@ -4,44 +4,44 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
+    --background:         0 0% 98%;
+    --foreground:         222.2 84% 4.9%;
+    --card:               0 0% 100%;
+    --card-foreground:    222.2 84% 4.9%;
+    --primary:            221.2 83.2% 50%;
     --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
+    --secondary:          210 40% 95%;
     --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
+    --muted:              210 40% 95%;
+    --muted-foreground:   215.4 16.3% 46.9%;
+    --accent:             210 40% 95%;
+    --accent-foreground:  222.2 47.4% 11.2%;
+    --destructive:        0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
+    --border:             214.3 31.8% 89%;
+    --input:              214.3 31.8% 89%;
+    --ring:               221.2 83.2% 50%;
+    --radius:             0.625rem;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
+    --background:         222.2 84% 4.9%;
+    --foreground:         210 40% 98%;
+    --card:               222.2 84% 7%;
+    --card-foreground:    210 40% 98%;
+    --primary:            217.2 91.2% 59.8%;
     --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
+    --secondary:          217.2 32.6% 17.5%;
     --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
+    --muted:              217.2 32.6% 17.5%;
+    --muted-foreground:   215 20.2% 65.1%;
+    --accent:             217.2 32.6% 17.5%;
+    --accent-foreground:  210 40% 98%;
+    --destructive:        0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    --border:             217.2 32.6% 17.5%;
+    --input:              217.2 32.6% 17.5%;
+    --ring:               224.3 76.3% 48%;
   }
 }
 
@@ -49,8 +49,53 @@
   * {
     @apply border-border;
   }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
   body {
     @apply bg-background text-foreground;
-    font-feature-settings: "rlig" 1, "calt" 1;
+    font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
   }
+
+  /* Subtle page-level gradient tint */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 80% 50% at 50% -10%, hsl(221 83% 50% / 0.06), transparent);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar          { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track    { background: hsl(var(--muted)); border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb    { background: hsl(var(--border)); border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); }
+}
+
+/* animate-in utilities (requires tailwindcss-animate or manual keyframes) */
+@layer utilities {
+  .animate-in {
+    animation-duration: 0.3s;
+    animation-fill-mode: both;
+    animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .fade-in           { animation-name: fadeIn; }
+  .slide-in-from-bottom-2 { animation-name: slideInFromBottom2; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideInFromBottom2 {
+  from { transform: translateY(8px); opacity: 0; }
+  to   { transform: translateY(0);   opacity: 1; }
 }

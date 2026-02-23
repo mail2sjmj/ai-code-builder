@@ -26,7 +26,7 @@ def safe_path_join(base_dir: str, *parts: str) -> Path:
     """
     base = Path(base_dir).resolve()
     target = (base / Path(*parts)).resolve()
-    if not str(target).startswith(str(base)):
+    if not target.is_relative_to(base):
         raise ValueError(
             f"Path traversal detected: '{target}' escapes base '{base}'"
         )

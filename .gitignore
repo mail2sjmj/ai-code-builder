@@ -25,12 +25,19 @@ frontend/dist/
 frontend/.vite/
 *.tsbuildinfo
 
-# ─── Environment files (NEVER commit these) ──────────────────────────────────
+# ─── Environment files ───────────────────────────────────────────────────────
+# Base .env files contain secrets (API keys) — NEVER commit.
 .env
 .env.local
-.env.*.local
 backend/.env
 frontend/.env
+
+# Per-environment overlay files (.env.development / .env.staging / .env.production)
+# contain only non-secret config and ARE committed (no gitignore rule for them).
+# Personal local overrides for each environment are gitignored:
+.env.*.local
+backend/.env.*.local
+frontend/.env.*.local
 
 # ─── IDE ─────────────────────────────────────────────────────────────────────
 .vscode/
@@ -39,6 +46,9 @@ frontend/.env
 *.swo
 .DS_Store
 Thumbs.db
+
+# ─── Service management runtime files ───────────────────────────────────────
+.pids/              # PID files written by scripts/manage.py at runtime
 
 # ─── Docker ──────────────────────────────────────────────────────────────────
 .docker/
