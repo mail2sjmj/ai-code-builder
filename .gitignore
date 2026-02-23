@@ -25,16 +25,22 @@ frontend/dist/
 frontend/.vite/
 *.tsbuildinfo
 
-# ─── Environment files ───────────────────────────────────────────────────────
-# Base .env files contain secrets (API keys) — NEVER commit.
+# ─── Environment files — ALL contain secrets — NEVER commit ─────────────────
+# Base selector (.env): sets APP_ENV only.
 .env
 .env.local
 backend/.env
 frontend/.env
 
-# Per-environment overlay files (.env.development / .env.staging / .env.production)
-# contain only non-secret config and ARE committed (no gitignore rule for them).
-# Personal local overrides for each environment are gitignored:
+# Per-environment files (.env.development / .env.staging / .env.production):
+# each is fully self-contained and includes the ANTHROPIC_API_KEY for that
+# environment — must be gitignored.
+# Use .env.example as the template; create one file per environment locally.
+backend/.env.development
+backend/.env.staging
+backend/.env.production
+
+# Personal local overrides (e.g. .env.development.local) — also gitignored:
 .env.*.local
 backend/.env.*.local
 frontend/.env.*.local
