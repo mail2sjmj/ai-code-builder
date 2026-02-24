@@ -1,13 +1,11 @@
 """
-AST-level code validation using Python's ast module + RestrictedPython.
+AST-level code validation using Python's ast module.
 Rejects dangerous imports, builtins, and attribute access patterns.
 """
 
 import ast
 import logging
 from dataclasses import dataclass, field
-
-from RestrictedPython import compile_restricted
 
 from app.sandbox.policy import BLOCKED_ATTRIBUTES, BLOCKED_MODULES
 
@@ -24,16 +22,16 @@ class ValidationResult:
 def validate_code(code: str) -> ValidationResult:
     """
     Perform two-pass validation:
-    1. RestrictedPython compile check (syntax + restricted grammar).
+    1. Syntax check via built-in compile().
     2. Custom AST walk for blocked imports and dangerous patterns.
 
     Returns ValidationResult — never raises.
     """
     result = ValidationResult(is_valid=True)
 
-    # ── Pass 1: RestrictedPython compile ────────────────────────────────────
+    # ── Pass 1: Syntax check ─────────────────────────────────────────────────
     try:
-        compile_restricted(code, filename="<user_code>", mode="exec")
+        compile(code, "<user_code>", "exec")
     except SyntaxError as exc:
         result.is_valid = False
         result.errors.append(f"Syntax error: {exc}")
