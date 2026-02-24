@@ -281,7 +281,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     else:
         try:
             _ensure_backend_deps()
-            if args.frontend:
+            if not args.backend_only:
                 _ensure_frontend_deps()
         except RuntimeError as exc:
             _err(str(exc))
@@ -368,7 +368,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         return 2
 
     # ── Optionally start frontend dev server ──────────────────────────────────
-    if args.frontend:
+    if not args.backend_only:
         _start_frontend(app_env, skip_deps=True)  # already installed above
 
     return 0
@@ -419,7 +419,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
     _header("Stop")
 
     targets = [("Backend", BACKEND_PID_FILE)]
-    if args.frontend:
+    if not args.backend_only:
         targets.append(("Frontend", FRONTEND_PID_FILE))
 
     stopped_any = False
@@ -521,16 +521,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ps.add_argument("--port", type=int, default=8000, metavar="PORT",
                     help="Backend port (default: 8000)")
-    ps.add_argument("--frontend", action="store_true",
-                    help="Also start the Vite frontend dev server")
+    ps.add_argument("--backend-only", action="store_true",
+                    help="Start only the backend, skip the Vite frontend dev server")
     ps.add_argument("--foreground", action="store_true",
                     help="Run in foreground (blocking — useful for debugging)")
     ps.add_argument("--skip-deps", action="store_true",
                     help="Skip pip/npm dependency installation (faster restart when deps haven't changed)")
 
     # stop
-    pp = sub.add_parser("stop", help="Stop running services")
-    pp.add_argument("--frontend", action="store_true", help="Also stop the frontend")
+    pp = sub.add_parser("stop", help="Stop running services (backend + frontend by default)")
+    pp.add_argument("--backend-only", action="store_true",
+                    help="Stop only the backend, leave the frontend running")
     pp.add_argument("--force", action="store_true",
                     help="Skip graceful shutdown and force-kill immediately")
 

@@ -23,7 +23,7 @@ An enterprise-grade AI-powered tool that transforms natural language data instru
 | Backend | FastAPI (Python 3.12) |
 | AI | Anthropic Claude (claude-sonnet-4-6) |
 | Data | pandas + openpyxl + pyarrow |
-| Sandbox | RestrictedPython + subprocess isolation |
+| Sandbox | AST validation + subprocess isolation |
 
 ## Quick Start
 
@@ -32,7 +32,32 @@ An enterprise-grade AI-powered tool that transforms natural language data instru
 - Node.js 20+
 - An Anthropic API key
 
-### Local Development
+### Local Development (Recommended — management scripts)
+
+```bash
+cp backend/.env.example backend/.env
+# Edit backend/.env and set ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Windows (PowerShell):**
+```powershell
+scripts\start.bat          # start backend + frontend
+scripts\stop.bat           # stop backend + frontend
+scripts\start.bat --backend-only   # start backend only
+scripts\stop.bat --backend-only    # stop backend only
+scripts\start.bat --skip-deps      # skip pip/npm install (faster restart)
+```
+
+**macOS / Linux:**
+```bash
+scripts/start.sh           # start backend + frontend
+scripts/stop.sh            # stop backend + frontend
+```
+
+Backend runs at http://localhost:8000. API docs at http://localhost:8000/docs.
+Frontend runs at http://localhost:5173.
+
+### Local Development (Manual)
 
 **Backend:**
 ```bash
@@ -43,16 +68,13 @@ pip install poetry
 poetry install
 poetry run uvicorn app.main:app --reload
 ```
-Backend runs at http://localhost:8000. API docs at http://localhost:8000/docs.
 
 **Frontend:**
 ```bash
 cd frontend
-cp .env.example .env
 npm install
 npm run dev
 ```
-Frontend runs at http://localhost:5173.
 
 ### Docker (Production)
 
@@ -89,9 +111,9 @@ Key settings:
 ## Security
 
 The code execution sandbox uses 4 isolation layers:
-1. **AST validation** — blocks dangerous imports and builtins before execution
-2. **Subprocess isolation** — code runs in a child process with a minimal environment
-3. **Import allowlist** — only pandas, numpy, os, pathlib, re, datetime, math, json, csv, collections
+1. **Syntax check** — built-in `compile()` validates syntax before any execution
+2. **AST validation** — blocks dangerous imports (`subprocess`, `sys`, `socket`, …) and builtins (`exec`, `eval`, `open`) before execution
+3. **Subprocess isolation** — code runs in a child process with a stripped environment and restricted `__builtins__`
 4. **Process timeout** — hard kill after `SANDBOX_TIMEOUT_SECONDS`
 
 ## Project Structure
@@ -115,6 +137,12 @@ ai-code-builder/
 │       ├── store/          # Zustand stores
 │       ├── services/       # API client
 │       └── utils/          # SSE parser, formatters, validation
+├── scripts/                 # Service management
+│   ├── start.bat / start.sh # Start backend + frontend
+│   ├── stop.bat  / stop.sh  # Stop backend + frontend
+│   ├── status.bat           # Show running services
+│   ├── health.bat           # Check backend /health
+│   └── manage.py            # Cross-platform management script
 ├── docker-compose.yml
 └── .github/workflows/ci.yml
 ```

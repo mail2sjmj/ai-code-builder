@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     CODEGEN_MAX_TOKENS: int = Field(default=8192, ge=1024, le=32768)
     AI_TEMPERATURE: float = Field(default=0.2, ge=0.0, le=1.0)
     AI_REQUEST_TIMEOUT_SECONDS: int = Field(default=120, ge=10, le=600)
+    AI_MAX_RETRIES: int = Field(default=5, ge=0, le=10)
 
     # ── Validators ────────────────────────────────────────────────────────────
 

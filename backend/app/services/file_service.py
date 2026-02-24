@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 async def parse_uploaded_file(
     file: UploadFile,
     settings: Settings,
+    *,
+    header_row: int | None = None,
+    meta_file: UploadFile | None = None,
 ) -> tuple[str, SessionData]:
     """
     Validate, store, and parse an uploaded CSV/XLSX file.
@@ -77,10 +80,45 @@ async def parse_uploaded_file(
 
     # ── 4. Parse with pandas ─────────────────────────────────────────────────
     try:
-        if suffix == ".csv":
-            df = pd.read_csv(file_path, on_bad_lines="skip")
+        if meta_file is not None:
+            # Meta file supplies the column names; data file contains raw rows only.
+            meta_content = await meta_file.read()
+            meta_suffix = Path(meta_file.filename or "").suffix.lower()
+            import io
+            if meta_suffix == ".xlsx":
+                meta_df = pd.read_excel(io.BytesIO(meta_content), header=0, nrows=0, engine="openpyxl")
+            else:
+                meta_df = pd.read_csv(io.BytesIO(meta_content), header=0, nrows=0)
+            meta_columns = list(meta_df.columns)
+
+            # Read the data file with no header — every row is a data row.
+            if suffix == ".csv":
+                df = pd.read_csv(file_path, header=None, on_bad_lines="skip")
+            else:
+                df = pd.read_excel(file_path, header=None, engine="openpyxl")
+
+            if len(df.columns) != len(meta_columns):
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error_code": "COLUMN_MISMATCH",
+                        "message": (
+                            f"Meta file has {len(meta_columns)} columns but data file has "
+                            f"{len(df.columns)} columns. They must match."
+                        ),
+                    },
+                )
+            df.columns = meta_columns
+            logger.info("Applied %d meta columns to data file", len(meta_columns))
         else:
-            df = pd.read_excel(file_path, engine="openpyxl")
+            # header_row is 1-indexed from the user; pandas uses 0-indexed.
+            pandas_header = (header_row - 1) if header_row is not None else 0
+            if suffix == ".csv":
+                df = pd.read_csv(file_path, header=pandas_header, on_bad_lines="skip")
+            else:
+                df = pd.read_excel(file_path, header=pandas_header, engine="openpyxl")
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Failed to parse file: %s", exc)
         raise HTTPException(
