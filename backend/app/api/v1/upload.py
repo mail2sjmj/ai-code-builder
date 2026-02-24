@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.api.dependencies import deps_session_store, deps_settings
 from app.config.settings import Settings
@@ -22,10 +22,14 @@ router = APIRouter(tags=["Upload"])
 )
 async def upload_file(
     file: UploadFile,
+    header_row: int | None = Form(None),
+    meta_file: UploadFile | None = File(default=None),
     settings: Settings = Depends(deps_settings),
     session_store: SessionStore = Depends(deps_session_store),
 ) -> UploadResponse:
-    session_id, session_data = await parse_uploaded_file(file, settings)
+    session_id, session_data = await parse_uploaded_file(
+        file, settings, header_row=header_row, meta_file=meta_file
+    )
     await session_store.create_session(session_data)
     logger.info("Upload endpoint: new session %s", session_id)
     return UploadResponse(

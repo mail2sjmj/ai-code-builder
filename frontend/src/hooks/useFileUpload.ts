@@ -10,9 +10,11 @@ export function useFileUpload() {
   const { setSession } = useSessionStore()
 
   const mutation = useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: ({ file, headerRow, metaFile }: { file: File; headerRow?: number; metaFile?: File }) => {
       const formData = new FormData()
       formData.append('file', file)
+      if (headerRow != null) formData.append('header_row', String(headerRow))
+      if (metaFile != null) formData.append('meta_file', metaFile)
       return apiPostFormData<UploadResponse>('/upload', formData, setUploadProgress)
     },
     onSuccess: (data) => {

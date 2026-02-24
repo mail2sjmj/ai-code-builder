@@ -19,6 +19,7 @@ from app.prompts.codegen_prompt import (
     CODEGEN_USER_PROMPT_TEMPLATE,
 )
 from app.session.session_store import SessionStore
+from app.utils.ai_retry import anthropic_accumulate_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +48,11 @@ async def stream_code_generation(
     Stream generated Python code from Anthropic Claude.
 
     Yields:
-        Code text deltas as they arrive.
+        Code text (full, after fence-stripping).
     Raises:
         HTTPException 404 if session not found.
-        HTTPException 502 on Anthropic API errors.
+        HTTPException 429 if rate-limited after all retries exhausted.
+        HTTPException 502 on unrecoverable Anthropic API errors.
     """
     session = await session_store.get_session(session_id)
     if session is None:
@@ -79,25 +81,20 @@ async def stream_code_generation(
     )
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    accumulated: list[str] = []
 
-    try:
-        async with client.messages.stream(
+    def make_stream():
+        return client.messages.stream(
             model=settings.ANTHROPIC_MODEL,
             max_tokens=settings.CODEGEN_MAX_TOKENS,
             system=CODEGEN_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
-        ) as stream:
-            async for text_delta in stream.text_stream:
-                accumulated.append(text_delta)
+        )
 
-        # Strip opening and closing fences from the full output
-        code = "".join(accumulated)
-        code = _strip_fences(code)
-        yield code
-
+    try:
+        raw = await anthropic_accumulate_with_retry(make_stream, max_retries=settings.AI_MAX_RETRIES)
+        yield _strip_fences(raw)
     except anthropic.RateLimitError as exc:
-        logger.warning("Anthropic rate limit: %s", exc)
+        logger.warning("Anthropic rate limit exhausted after %d retries: %s", settings.AI_MAX_RETRIES, exc)
         raise HTTPException(
             status_code=429,
             detail={"error_code": "RATE_LIMITED", "message": "AI service rate limit reached."},
@@ -121,10 +118,11 @@ async def stream_code_fix(
     Stream a corrected version of broken Python code from Anthropic Claude.
 
     Yields:
-        Fixed code text.
+        Fixed code text (full, after fence-stripping).
     Raises:
         HTTPException 404 if session not found.
-        HTTPException 502 on Anthropic API errors.
+        HTTPException 429 if rate-limited after all retries exhausted.
+        HTTPException 502 on unrecoverable Anthropic API errors.
     """
     session = await session_store.get_session(session_id)
     if session is None:
@@ -139,23 +137,20 @@ async def stream_code_fix(
     )
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    accumulated: list[str] = []
 
-    try:
-        async with client.messages.stream(
+    def make_stream():
+        return client.messages.stream(
             model=settings.ANTHROPIC_MODEL,
             max_tokens=settings.CODEGEN_MAX_TOKENS,
             system=AUTOFIX_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
-        ) as stream:
-            async for text_delta in stream.text_stream:
-                accumulated.append(text_delta)
+        )
 
-        code = _strip_fences("".join(accumulated))
-        yield code
-
+    try:
+        raw = await anthropic_accumulate_with_retry(make_stream, max_retries=settings.AI_MAX_RETRIES)
+        yield _strip_fences(raw)
     except anthropic.RateLimitError as exc:
-        logger.warning("Anthropic rate limit during auto-fix: %s", exc)
+        logger.warning("Anthropic rate limit exhausted after %d retries during auto-fix: %s", settings.AI_MAX_RETRIES, exc)
         raise HTTPException(
             status_code=429,
             detail={"error_code": "RATE_LIMITED", "message": "AI service rate limit reached."},

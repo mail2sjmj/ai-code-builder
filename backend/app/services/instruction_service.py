@@ -14,6 +14,7 @@ from app.prompts.refinement_prompt import (
     REFINEMENT_USER_PROMPT_TEMPLATE,
 )
 from app.session.session_store import SessionStore
+from app.utils.ai_retry import anthropic_stream_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,8 @@ async def stream_instruction_refinement(
         Text delta strings as they arrive from the model.
     Raises:
         HTTPException 404 if session not found.
-        HTTPException 502 on Anthropic API errors.
+        HTTPException 429 if rate-limited after all retries exhausted.
+        HTTPException 502 on unrecoverable Anthropic API errors.
     """
     session = await session_store.get_session(session_id)
     if session is None:
@@ -52,17 +54,21 @@ async def stream_instruction_refinement(
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-    try:
-        async with client.messages.stream(
+    def make_stream():
+        return client.messages.stream(
             model=settings.ANTHROPIC_MODEL,
             max_tokens=settings.REFINE_MAX_TOKENS,
             system=REFINEMENT_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
-        ) as stream:
-            async for text_delta in stream.text_stream:
-                yield text_delta
+        )
+
+    try:
+        async for text_delta in anthropic_stream_with_retry(
+            make_stream, max_retries=settings.AI_MAX_RETRIES
+        ):
+            yield text_delta
     except anthropic.RateLimitError as exc:
-        logger.warning("Anthropic rate limit hit: %s", exc)
+        logger.warning("Anthropic rate limit exhausted after %d retries: %s", settings.AI_MAX_RETRIES, exc)
         raise HTTPException(
             status_code=429,
             detail={"error_code": "RATE_LIMITED", "message": "AI service rate limit reached. Please try again shortly."},
