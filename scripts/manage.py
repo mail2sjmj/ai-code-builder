@@ -6,14 +6,14 @@ Works on Windows, macOS, and Linux without external dependencies.
 
 Usage (run from the project root, or let the shell wrappers handle the cwd):
   python scripts/manage.py start   [--env ENV] [--port PORT] [--frontend] [--foreground]
-  python scripts/manage.py stop    [--frontend] [--force]
+  python scripts/manage.py stop    [--backend-only] [--port PORT] [--force] [--purge-cache]
   python scripts/manage.py health  [--port PORT] [--url URL]
   python scripts/manage.py status
 
 Examples:
   python scripts/manage.py start --env development
   python scripts/manage.py start --env production --port 8080
-  python scripts/manage.py stop  --frontend
+  python scripts/manage.py stop  --backend-only
   python scripts/manage.py health
   python scripts/manage.py status
 """
@@ -217,6 +217,88 @@ def _terminate(pid: int, *, force: bool = False) -> bool:
             return False
 
 
+def _find_uvicorn_orphans() -> set[int]:
+    """
+    Find orphaned uvicorn multiprocessing-fork server processes on Windows.
+
+    When uvicorn uses --reload, it spawns server workers via multiprocessing.spawn.
+    If the reloader (parent) is killed, these children become orphans and keep
+    listening on the backend port with stale code.  This finds them by looking
+    for python.exe processes whose command line contains '--multiprocessing-fork'
+    and whose *parent* process is no longer alive.
+    """
+    orphans: set[int] = set()
+    if not IS_WINDOWS:
+        return orphans
+    try:
+        out = subprocess.check_output(
+            ["wmic", "process", "where", "name='python.exe'",
+             "get", "ProcessId,ParentProcessId,CommandLine"],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+        for line in out.splitlines():
+            if "--multiprocessing-fork" not in line:
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                pid    = int(parts[-1])
+                parent = int(parts[-2])
+            except ValueError:
+                continue
+            if not _process_running(parent):
+                orphans.add(pid)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return orphans
+
+
+def _find_pids_on_port(port: int) -> set[int]:
+    """Return the set of PIDs currently listening on *port* (cross-platform)."""
+    pids: set[int] = set()
+    try:
+        if IS_WINDOWS:
+            out = subprocess.check_output(
+                ["netstat", "-ano"], text=True, stderr=subprocess.DEVNULL
+            )
+            for line in out.splitlines():
+                parts = line.split()
+                # netstat -ano line: Proto  LocalAddr  ForeignAddr  State  PID
+                if len(parts) == 5 and f":{port}" in parts[1] and parts[3] == "LISTENING":
+                    try:
+                        pids.add(int(parts[4]))
+                    except ValueError:
+                        pass
+        else:
+            # lsof is available on macOS by default; on Linux if installed
+            out = subprocess.check_output(
+                ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
+                text=True, stderr=subprocess.DEVNULL,
+            )
+            for token in out.split():
+                try:
+                    pids.add(int(token.strip()))
+                except ValueError:
+                    pass
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return pids
+
+
+def _clear_pycache(root_dir: Path) -> int:
+    """Remove all __pycache__ directories under *root_dir*. Returns count removed."""
+    removed = 0
+    # Sort reversed so deepest dirs are removed before their parents
+    for cache_dir in sorted(root_dir.rglob("__pycache__"), reverse=True):
+        try:
+            shutil.rmtree(cache_dir)
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 # ── Log directory resolution ───────────────────────────────────────────────────
 
 def _log_dir(app_env: str) -> Path:
@@ -296,6 +378,12 @@ def cmd_start(args: argparse.Namespace) -> int:
     python = _venv_python()
     _info(f"Python  : {python}")
     _info(f"Root    : {ROOT}")
+
+    # Always purge bytecode cache before starting — prevents stale .pyc from
+    # shadowing source edits even when mtime resolution is coarse (Windows FAT).
+    n = _clear_pycache(BACKEND_DIR)
+    if n:
+        _info(f"Cleared {n} __pycache__ director{'y' if n == 1 else 'ies'} from backend/.")
 
     uvicorn = _uvicorn_cmd(python, port, app_env)
     env     = {**os.environ, "APP_ENV": app_env}
@@ -418,6 +506,12 @@ def _start_frontend(app_env: str, *, skip_deps: bool = False) -> None:
 def cmd_stop(args: argparse.Namespace) -> int:
     _header("Stop")
 
+    # Map service name → port so we can hunt for stragglers after the PID kill
+    backend_port = getattr(args, "port", 8000)
+    port_map: dict[str, int] = {"Backend": backend_port}
+    if not args.backend_only:
+        port_map["Frontend"] = 5173  # Vite default
+
     targets = [("Backend", BACKEND_PID_FILE)]
     if not args.backend_only:
         targets.append(("Frontend", FRONTEND_PID_FILE))
@@ -425,34 +519,70 @@ def cmd_stop(args: argparse.Namespace) -> int:
     stopped_any = False
     for name, pid_file in targets:
         pid = _read_pid(pid_file)
+        known_pid: int | None = pid
+
         if pid is None:
-            _info(f"{name}: no PID file found — not running.")
-            continue
-        if not _process_running(pid):
+            _info(f"{name}: no PID file found.")
+        elif not _process_running(pid):
             _warn(f"{name}: PID {pid} is stale (process gone). Cleaning up.")
             pid_file.unlink(missing_ok=True)
-            continue
-
-        _info(f"Stopping {name} (PID {pid})…")
-        _terminate(pid, force=args.force)
-
-        # Wait up to 10 s for graceful exit, then force-kill
-        for _ in range(10):
-            time.sleep(1)
-            if not _process_running(pid):
-                break
+            known_pid = None
         else:
-            if not args.force:
-                _warn(f"{name} did not exit gracefully — force killing…")
-                _terminate(pid, force=True)
+            _info(f"Stopping {name} (PID {pid})…")
+            _terminate(pid, force=args.force)
+
+            # Wait up to 10 s for graceful exit, then force-kill
+            for _ in range(10):
                 time.sleep(1)
+                if not _process_running(pid):
+                    break
+            else:
+                if not args.force:
+                    _warn(f"{name} did not exit gracefully — force killing…")
+                    _terminate(pid, force=True)
+                    time.sleep(1)
 
-        if not _process_running(pid):
-            pid_file.unlink(missing_ok=True)
-            _ok(f"{name} stopped.")
-            stopped_any = True
-        else:
-            _err(f"Could not stop {name} (PID {pid}). Try --force.")
+            if not _process_running(pid):
+                pid_file.unlink(missing_ok=True)
+                _ok(f"{name} stopped.")
+                stopped_any = True
+            else:
+                _err(f"Could not stop {name} (PID {pid}). Try --force.")
+
+        # ── Kill any stray processes still listening on the same port ─────────
+        port = port_map.get(name)
+        if port:
+            stragglers = _find_pids_on_port(port) - ({known_pid} if known_pid else set())
+            if stragglers:
+                _warn(
+                    f"{name}: {len(stragglers)} stray process(es) still on port {port} "
+                    f"(PIDs: {', '.join(str(p) for p in sorted(stragglers))}) — force-killing…"
+                )
+                for stale_pid in stragglers:
+                    if _terminate(stale_pid, force=True):
+                        _ok(f"  Killed stray PID {stale_pid}.")
+                        stopped_any = True
+                    else:
+                        _warn(f"  Could not kill stray PID {stale_pid}.")
+
+    # ── Kill orphaned multiprocessing-fork server children ────────────────────
+    orphans = _find_uvicorn_orphans()
+    if orphans:
+        _warn(
+            f"Found {len(orphans)} orphaned uvicorn worker(s) "
+            f"(PIDs: {', '.join(str(p) for p in sorted(orphans))}) — force-killing…"
+        )
+        for opid in orphans:
+            if _terminate(opid, force=True):
+                _ok(f"  Killed orphan PID {opid}.")
+                stopped_any = True
+            else:
+                _warn(f"  Could not kill orphan PID {opid}.")
+
+    # ── Optionally purge bytecode cache ───────────────────────────────────────
+    if getattr(args, "purge_cache", False):
+        n = _clear_pycache(BACKEND_DIR)
+        _ok(f"Cleared {n} __pycache__ director{'y' if n == 1 else 'ies'} from backend/.")
 
     if not stopped_any:
         _info("No services were running.")
@@ -532,8 +662,12 @@ def _build_parser() -> argparse.ArgumentParser:
     pp = sub.add_parser("stop", help="Stop running services (backend + frontend by default)")
     pp.add_argument("--backend-only", action="store_true",
                     help="Stop only the backend, leave the frontend running")
+    pp.add_argument("--port", type=int, default=8000, metavar="PORT",
+                    help="Backend port to scan for stray processes (default: 8000)")
     pp.add_argument("--force", action="store_true",
                     help="Skip graceful shutdown and force-kill immediately")
+    pp.add_argument("--purge-cache", action="store_true",
+                    help="Also delete all backend __pycache__ dirs after stopping")
 
     # health
     ph = sub.add_parser("health", help="Check the backend /health endpoint")

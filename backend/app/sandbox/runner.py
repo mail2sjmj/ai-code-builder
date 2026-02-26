@@ -6,13 +6,17 @@ Security layers: restricted env vars, temp working dir, process timeout.
 import logging
 import subprocess
 import sys
-import textwrap
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Wrapper script stored as a plain .py file next to this module.
+# Reading from disk (not an in-memory string) eliminates any
+# possibility of pyc-cache or string-escaping corrupting the content.
+_WRAPPER_SCRIPT_PATH = Path(__file__).parent / "_wrapper_script.py"
 
 
 @dataclass
@@ -24,45 +28,6 @@ class SandboxResult:
     timed_out: bool
     output_csv_path: Optional[str]
     execution_time_ms: int
-
-
-# The wrapper script injected before user code.
-# It sets up a minimal environment: pandas + numpy only, no dangerous builtins.
-_WRAPPER_TEMPLATE = textwrap.dedent("""\
-    import os
-    import sys
-    import json
-
-    # ─── Redirect stderr for clean error capture ─────────────────────────────
-    import io
-
-    # ─── Restrict __builtins__ ───────────────────────────────────────────────
-    SAFE_BUILTINS = {{
-        'abs': abs, 'all': all, 'any': any, 'bool': bool, 'bytes': bytes,
-        'dict': dict, 'divmod': divmod, 'enumerate': enumerate, 'filter': filter,
-        'float': float, 'format': format, 'frozenset': frozenset,
-        'getattr': getattr, 'hasattr': hasattr, 'hash': hash, 'hex': hex,
-        'int': int, 'isinstance': isinstance, 'issubclass': issubclass,
-        'iter': iter, 'len': len, 'list': list, 'map': map, 'max': max,
-        'min': min, 'next': next, 'object': object, 'oct': oct, 'ord': ord,
-        'pow': pow, 'print': print, 'range': range, 'repr': repr,
-        'reversed': reversed, 'round': round, 'set': set, 'setattr': setattr,
-        'slice': slice, 'sorted': sorted, 'str': str, 'sum': sum,
-        'tuple': tuple, 'type': type, 'zip': zip,
-        '__name__': '__main__', '__doc__': None,
-    }}
-
-    # ─── Execute user code ────────────────────────────────────────────────────
-    user_code_path = os.path.join(os.path.dirname(__file__), 'transform.py')
-    with open(user_code_path, 'r', encoding='utf-8') as f:
-        user_code = f.read()
-
-    try:
-        exec(compile(user_code, 'transform.py', 'exec'), {{'__builtins__': SAFE_BUILTINS}})
-    except Exception as exc:
-        print(f"EXECUTION ERROR: {{exc}}", file=sys.stderr)
-        sys.exit(1)
-""")
 
 
 def execute_code_in_sandbox(
@@ -97,9 +62,10 @@ def execute_code_in_sandbox(
     transform_file = exec_dir / "transform.py"
     transform_file.write_text(code, encoding="utf-8")
 
-    # Write wrapper
+    # Copy wrapper script from disk (read fresh each call — never from pyc cache).
     wrapper_file = exec_dir / "sandbox_wrapper.py"
-    wrapper_file.write_text(_WRAPPER_TEMPLATE, encoding="utf-8")
+    _wrapper_content = (Path(__file__).parent / "_wrapper_script.py").read_text(encoding="utf-8")
+    wrapper_file.write_text(_wrapper_content, encoding="utf-8")
 
     # Minimal environment — no home, no user, no secrets
     import os
