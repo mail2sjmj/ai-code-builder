@@ -589,6 +589,26 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── restart ────────────────────────────────────────────────────────────────────
+
+def cmd_restart(args: argparse.Namespace) -> int:
+    _header("Restart")
+
+    # Build a stop-args namespace reusing compatible fields from args
+    stop_args = argparse.Namespace(
+        backend_only=args.backend_only,
+        port=args.port,
+        force=False,
+        purge_cache=False,
+    )
+    rc = cmd_stop(stop_args)
+    if rc not in (0, None):
+        _err("Stop failed — aborting restart.")
+        return rc
+
+    return cmd_start(args)
+
+
 # ── health ─────────────────────────────────────────────────────────────────────
 
 def cmd_health(args: argparse.Namespace) -> int:
@@ -658,6 +678,23 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--skip-deps", action="store_true",
                     help="Skip pip/npm dependency installation (faster restart when deps haven't changed)")
 
+    # restart
+    pr = sub.add_parser("restart", help="Stop then start services (accepts same flags as start)")
+    pr.add_argument(
+        "--env",
+        default=os.environ.get("APP_ENV", "development"),
+        choices=["development", "staging", "production"],
+        help="APP_ENV to use (default: development, or $APP_ENV)",
+    )
+    pr.add_argument("--port", type=int, default=8000, metavar="PORT",
+                    help="Backend port (default: 8000)")
+    pr.add_argument("--backend-only", action="store_true",
+                    help="Restart only the backend, skip the Vite frontend dev server")
+    pr.add_argument("--foreground", action="store_true",
+                    help="Run in foreground after restart")
+    pr.add_argument("--skip-deps", action="store_true",
+                    help="Skip pip/npm dependency installation (faster restart)")
+
     # stop
     pp = sub.add_parser("stop", help="Stop running services (backend + frontend by default)")
     pp.add_argument("--backend-only", action="store_true",
@@ -686,10 +723,11 @@ def main() -> None:
     parser = _build_parser()
     args   = parser.parse_args()
     handlers = {
-        "start":  cmd_start,
-        "stop":   cmd_stop,
-        "health": cmd_health,
-        "status": cmd_status,
+        "start":   cmd_start,
+        "stop":    cmd_stop,
+        "restart": cmd_restart,
+        "health":  cmd_health,
+        "status":  cmd_status,
     }
     sys.exit(handlers[args.command](args) or 0)
 

@@ -14,7 +14,7 @@ Rules you MUST follow:
 4. Load data: df = pd.read_parquet(os.environ['INPUT_FILE_PATH'])
 5. Save output: df_output.to_csv(os.environ['OUTPUT_FILE_PATH'], index=False)
 6. Wrap all logic in a main() function. Call it under: if __name__ == '__main__': main()
-7. Handle exceptions with try/except; print errors to stderr using sys.stderr — but do NOT import sys elsewhere
+7. Handle exceptions with try/except; re-raise or print errors using print() — do NOT import sys or use sys.stderr
 8. Print progress milestones to stdout (e.g., print(f"Loaded {len(df):,} rows"))
 9. Code must be self-contained. No input() calls. No hardcoded file paths.
 10. Add inline comments explaining non-obvious logic.

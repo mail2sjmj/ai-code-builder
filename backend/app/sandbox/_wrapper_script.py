@@ -22,6 +22,7 @@ SAFE_BUILTINS = {
     'slice': slice, 'sorted': sorted, 'str': str, 'sum': sum,
     'tuple': tuple, 'type': type, 'zip': zip,
     '__name__': '__main__', '__doc__': None,
+    '__import__': __import__,
 }
 
 # ── Execute user code ─────────────────────────────────────────────────────────
